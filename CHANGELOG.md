@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [lnk-core 0.3.0 / lnk-forensic 0.3.0] — 2026-06-13
+
+### Added
+
+- **`LinkTargetIDList` PIDL decode via the `shellitem` primitive.**
+  `LinkTargetIdList` now carries `items: Vec<shellitem::ShellItem>` (typed shell
+  items — volume, folder, file entry with long name / size / MAC times / NTFS MFT
+  reference) and `path: Option<String>` (the reconstructed shell-namespace path,
+  e.g. `My Computer\C:\…\evil.exe`). This resolves the real target even when the
+  `LinkInfo` block is absent. The raw blob is still kept verbatim in `raw`.
+
 ## [lnk-core 0.2.0 / lnk-forensic 0.2.0] — 2026-06-13
 
 ### Added — `lnk-core` (reader)

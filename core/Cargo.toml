@@ -1,6 +1,6 @@
 [package]
 name = "lnk-core"
-version = "0.2.0"
+version = "0.3.0"
 description = "Windows Shell Link (.lnk) + Jump List reader: parse [MS-SHLLINK] header, LinkInfo (volume serial, drive type, local base path), StringData, ExtraData (TrackerDataBlock machine_id / droid GUIDs), and Automatic/Custom Destinations Jump Lists into typed ShellLink / JumpList"
 edition.workspace = true
 rust-version.workspace = true
@@ -21,6 +21,9 @@ forensicnomicon = "0.5.1"
 # cfb — the mature MIT OLE Compound-File reader. Jump List
 # *.automaticDestinations-ms files are CFB compound files; DRY, do not reinvent.
 cfb = "0.14"
+# shellitem — the reusable PIDL/ITEMIDLIST decoder primitive. The LinkTargetIDList
+# is an ITEMIDLIST; decode it here rather than reinventing shell-item parsing.
+shellitem = "0.1"
 
 [lints]
 workspace = true

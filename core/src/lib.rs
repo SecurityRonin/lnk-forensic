@@ -82,11 +82,20 @@ impl ShellLinkHeader {
     }
 }
 
-/// The raw `LinkTargetIDList` (`[MS-SHLLINK]` §2.2) — PIDL bytes kept verbatim.
+/// The `LinkTargetIDList` (`[MS-SHLLINK]` §2.2) — the target's shell-namespace
+/// path as an `ITEMIDLIST` (PIDL). The raw blob is kept verbatim and also decoded
+/// into typed shell items + a reconstructed path via the `shellitem` primitive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkTargetIdList {
-    /// The `IDListSize`-delimited ItemID blob, raw (no PIDL decode in v0.1).
+    /// The `IDListSize`-delimited ItemID blob, raw and verbatim.
     pub raw: Vec<u8>,
+    /// The decoded shell items (volume, folder, file entry, …). Empty when the
+    /// blob is truncated or carries no decodable item.
+    pub items: Vec<shellitem::ShellItem>,
+    /// The reconstructed shell-namespace path (e.g. `My Computer\C:\…\evil.exe`),
+    /// or `None` when no item yields a display name. This resolves the real
+    /// target even when the `LinkInfo` block is absent.
+    pub path: Option<String>,
 }
 
 /// The `LinkInfo` block (`[MS-SHLLINK]` §2.3).
@@ -303,7 +312,8 @@ pub fn parse_shell_link(data: &[u8]) -> Option<ShellLink> {
     // The variable-length sections begin immediately after the 0x4C header.
     let mut off = shlink::HEADER_SIZE as usize;
 
-    // §2.2 LinkTargetIDList — IDListSize-prefixed PIDL blob (kept raw).
+    // §2.2 LinkTargetIDList — IDListSize-prefixed PIDL blob. Kept raw and decoded
+    // into typed shell items + a reconstructed path via the `shellitem` primitive.
     let link_target_idlist = if header.has_flag(shlink::LINK_FLAG_HAS_LINK_TARGET_ID_LIST) {
         let id_list_size = le_u16(data, off) as usize;
         let blob_start = off + 2;
@@ -312,7 +322,13 @@ pub fn parse_shell_link(data: &[u8]) -> Option<ShellLink> {
             .map(<[u8]>::to_vec)
             .unwrap_or_default();
         off = blob_start + id_list_size;
-        Some(LinkTargetIdList { raw })
+        let items = shellitem::parse_idlist(&raw);
+        let path = if items.is_empty() {
+            None
+        } else {
+            Some(shellitem::reconstruct_path(&items))
+        };
+        Some(LinkTargetIdList { raw, items, path })
     } else {
         None
     };
