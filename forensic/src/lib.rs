@@ -100,7 +100,7 @@ impl Observation for LnkAnomaly {
                  network share (MITRE T1021)",
                 net_name
                     .as_deref()
-                    .map_or_else(String::new, |n| format!(" to {n:?}"))
+                    .map_or_else(String::new, |n| format!(" to {n}"))
             ),
             Self::TrackerMachine { machine_id } => format!(
                 "the tracker block records the origin machine {machine_id:?}; consistent with the \
@@ -112,13 +112,7 @@ impl Observation for LnkAnomaly {
 
 /// Audit a [`ShellLink`] into a typed [`LnkAnomaly`] stream.
 #[must_use]
-pub fn audit(_link: &ShellLink) -> Vec<LnkAnomaly> {
-    // RED stub: not yet implemented.
-    Vec::new()
-}
-
-#[allow(dead_code)]
-fn audit_impl(link: &ShellLink) -> Vec<LnkAnomaly> {
+pub fn audit(link: &ShellLink) -> Vec<LnkAnomaly> {
     let mut out = Vec::new();
 
     if let Some(info) = &link.link_info {
