@@ -262,13 +262,7 @@ fn unicode_z(data: &[u8], off: usize) -> Option<String> {
 /// truncated, or hostile input — every field read is bounds-checked, so a
 /// short/garbled body degrades to absent sub-structures rather than a crash.
 #[must_use]
-pub fn parse_shell_link(_data: &[u8]) -> Option<ShellLink> {
-    // RED stub: not yet implemented.
-    None
-}
-
-#[allow(dead_code)]
-fn parse_shell_link_impl(data: &[u8]) -> Option<ShellLink> {
+pub fn parse_shell_link(data: &[u8]) -> Option<ShellLink> {
     // §2.1 ShellLinkHeader — HeaderSize and LinkCLSID gate validity.
     if le_u32(data, 0) != shlink::HEADER_SIZE {
         return None;
