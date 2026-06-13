@@ -286,6 +286,38 @@ fn parses_link_target_idlist_raw() {
 }
 
 #[test]
+fn link_target_idlist_decodes_shell_items_and_path() {
+    // A real single-item PIDL: a 0x2F drive-letter volume "C:\" (libfwsi layout —
+    // class byte then a 20-byte NUL-terminated ASCII volume name), followed by the
+    // empty-item list terminator. lnk-core 0.3 decodes the IDList via `shellitem`
+    // and surfaces the typed items + reconstructed path, not just the raw bytes.
+    let mut field = [0u8; 20];
+    for (i, b) in "C:\\".bytes().enumerate().take(19) {
+        field[i] = b;
+    }
+    let mut pidl = Vec::new();
+    pidl.extend_from_slice(&(3u16 + field.len() as u16).to_le_bytes()); // cb
+    pidl.push(0x2F); // volume class
+    pidl.extend_from_slice(&field);
+    pidl.extend_from_slice(&[0u8, 0u8]); // empty-item terminator
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_TARGET_ID_LIST, 0);
+    data.extend_from_slice(&(pidl.len() as u16).to_le_bytes());
+    data.extend_from_slice(&pidl);
+    data.extend_from_slice(&TERMINAL);
+
+    let idl = parse_shell_link(&data).unwrap().link_target_idlist.unwrap();
+    assert_eq!(idl.raw, pidl, "raw IDList bytes are preserved");
+    assert_eq!(idl.items.len(), 1, "the volume item is decoded");
+    assert_eq!(idl.items[0].name.as_deref(), Some("C:\\"));
+    assert_eq!(
+        idl.path.as_deref(),
+        Some("C:\\"),
+        "reconstructed shell-namespace path"
+    );
+}
+
+#[test]
 fn parses_tracker_data_block() {
     let mut data = header(0, 0);
     data.extend_from_slice(&tracker_block(
