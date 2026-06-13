@@ -1,6 +1,6 @@
 [package]
 name = "lnk-forensic"
-version = "0.1.0"
+version = "0.2.0"
 description = "Forensic anomaly auditor for Windows Shell Link (.lnk) files — removable-media targets (volume serial join key to peripheral-forensic), network-share targets, and TrackerDataBlock machine attribution as graded report::Finding, built on lnk-core"
 edition.workspace = true
 rust-version.workspace = true
@@ -15,8 +15,10 @@ categories = ["parser-implementations", "filesystem"]
 exclude = ["/fuzz", "/.github", "/docs"]
 
 [dependencies]
-lnk-core = { version = "0.1", path = "../core" }
-forensicnomicon = "0.5"
+lnk-core = { version = "0.2", path = "../core" }
+# Path dep so the build sees forensicnomicon 0.5.1's `jumplist` module before it
+# is published; switch back to the registry `"0.5.1"` before publishing.
+forensicnomicon = { path = "../../forensicnomicon" }
 
 [lints]
 workspace = true

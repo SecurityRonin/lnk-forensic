@@ -1,7 +1,7 @@
 [package]
 name = "lnk-core"
-version = "0.1.0"
-description = "Windows Shell Link (.lnk) reader: parse [MS-SHLLINK] header, LinkInfo (volume serial, drive type, local base path), StringData, and ExtraData (TrackerDataBlock machine_id / droid GUIDs) into a typed ShellLink"
+version = "0.2.0"
+description = "Windows Shell Link (.lnk) + Jump List reader: parse [MS-SHLLINK] header, LinkInfo (volume serial, drive type, local base path), StringData, ExtraData (TrackerDataBlock machine_id / droid GUIDs), and Automatic/Custom Destinations Jump Lists into typed ShellLink / JumpList"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,7 +15,12 @@ categories = ["parser-implementations", "filesystem"]
 exclude = ["/fuzz", "/.github", "/docs"]
 
 [dependencies]
-forensicnomicon = "0.5"
+# Path dep so the build sees forensicnomicon 0.5.1's `jumplist` module before it
+# is published; switch back to the registry `"0.5.1"` before publishing lnk-core.
+forensicnomicon = { path = "../../forensicnomicon" }
+# cfb — the mature MIT OLE Compound-File reader. Jump List
+# *.automaticDestinations-ms files are CFB compound files; DRY, do not reinvent.
+cfb = "0.14"
 
 [lints]
 workspace = true

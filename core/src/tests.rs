@@ -638,3 +638,169 @@ fn undersize_extra_block_terminates_walk() {
     let link = parse_shell_link(&data).unwrap();
     assert!(link.tracker.is_none());
 }
+
+// ── Jump List builders + tests ────────────────────────────────────────────────
+
+/// A complete, valid removable-media `.lnk` for embedding into a Jump List.
+fn removable_lnk(serial: u32, base_path: &str) -> Vec<u8> {
+    let mut d = header(shlink::LINK_FLAG_HAS_LINK_INFO, shlink::FILE_ATTRIBUTE_ARCHIVE);
+    d.extend_from_slice(&link_info_volume(
+        drive_type::REMOVABLE,
+        serial,
+        "USB STICK",
+        base_path,
+    ));
+    d.extend_from_slice(&TERMINAL);
+    d
+}
+
+/// Build one v2+ (Windows 10) DestList entry.
+fn destlist_entry_v2(
+    entry_number: u32,
+    hostname: &str,
+    pinned: bool,
+    access_count: u32,
+    path: &str,
+) -> Vec<u8> {
+    let mut e = vec![0u8; 8]; // 0..8 unknown
+    e.extend_from_slice(&guid_le_bytes("11111111-2222-3333-4444-555555555555")); // droid volume
+    e.extend_from_slice(&guid_le_bytes("66666666-7777-8888-9999-aaaaaaaaaaaa")); // droid file
+    e.extend_from_slice(&guid_le_bytes("11111111-2222-3333-4444-555555555555")); // birth vol
+    e.extend_from_slice(&guid_le_bytes("66666666-7777-8888-9999-aaaaaaaaaaaa")); // birth file
+    let mut host = [0u8; 16];
+    for (i, c) in hostname.bytes().take(15).enumerate() {
+        host[i] = c;
+    }
+    e.extend_from_slice(&host); // hostname @72
+    e.extend_from_slice(&entry_number.to_le_bytes()); // entry number @88
+    e.extend_from_slice(&0u32.to_le_bytes()); // @92 unknown
+    e.extend_from_slice(&0u32.to_le_bytes()); // @96 unknown
+    e.extend_from_slice(&filetime_bytes(1_700_000_000)); // @100 last access
+    let pin: i32 = if pinned { 0 } else { -1 };
+    e.extend_from_slice(&pin.to_le_bytes()); // @108 pin status
+    e.extend_from_slice(&1u32.to_le_bytes()); // @112 status
+    e.extend_from_slice(&access_count.to_le_bytes()); // @116 access count
+    e.extend_from_slice(&[0u8; 8]); // @120 unknown
+    let units: Vec<u16> = path.encode_utf16().collect();
+    e.extend_from_slice(&(units.len() as u16).to_le_bytes()); // @128 path size
+    for u in &units {
+        e.extend_from_slice(&u.to_le_bytes()); // @130 path
+    }
+    e.extend_from_slice(&[0u8; 4]); // trailing alignment
+    e
+}
+
+/// Build a DestList stream (v2 header + one v2 entry).
+fn destlist_stream_v2(entry: &[u8]) -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&3u32.to_le_bytes()); // format version 3 (Win10)
+    s.extend_from_slice(&1u32.to_le_bytes()); // entry count
+    s.extend_from_slice(&0u32.to_le_bytes()); // pinned count
+    s.extend_from_slice(&0u32.to_le_bytes()); // @12 unknown
+    s.extend_from_slice(&1u32.to_le_bytes()); // @16 last entry number
+    s.extend_from_slice(&0u32.to_le_bytes()); // @20 unknown
+    s.extend_from_slice(&1u32.to_le_bytes()); // @24 last revision
+    s.extend_from_slice(&0u32.to_le_bytes()); // @28 unknown
+    assert_eq!(s.len(), 32);
+    s.extend_from_slice(entry);
+    s
+}
+
+/// Build a real CFB automatic-destinations file: a DestList stream + one
+/// hex-named LNK sub-stream.
+fn build_automatic_cfb(destlist: &[u8], entry_number: u32, lnk: &[u8]) -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+    comp.create_stream("DestList")
+        .unwrap()
+        .write_all(destlist)
+        .unwrap();
+    let name = format!("{entry_number:x}");
+    comp.create_stream(&name).unwrap().write_all(lnk).unwrap();
+    comp.flush().unwrap();
+    comp.into_inner().into_inner()
+}
+
+#[test]
+fn automatic_destinations_parses_destlist_and_embedded_lnk() {
+    let lnk = removable_lnk(0xDEAD_BEEF, "E:\\report.docx");
+    let entry = destlist_entry_v2(1, "ANALYST-PC", true, 9, "E:\\report.docx");
+    let destlist = destlist_stream_v2(&entry);
+    let cfb_bytes = build_automatic_cfb(&destlist, 1, &lnk);
+
+    let jl = parse_automatic_destinations(&cfb_bytes, Some("1b4dd67f29cb1962.automaticDestinations-ms"))
+        .expect("valid CFB automatic-destinations");
+    assert_eq!(jl.kind, JumpListKind::Automatic);
+    assert_eq!(jl.app_id.as_deref(), Some("1b4dd67f29cb1962"));
+    assert_eq!(jl.entries.len(), 1);
+
+    let e = &jl.entries[0];
+    let dl = e.destlist.as_ref().expect("destlist metadata");
+    assert_eq!(dl.entry_number, 1);
+    assert_eq!(dl.hostname, "ANALYST-PC");
+    assert!(dl.pinned);
+    assert_eq!(dl.access_count, Some(9));
+    assert_eq!(dl.path, "E:\\report.docx");
+    assert!(dl.last_access > 0);
+    // The embedded LNK's volume serial surfaces.
+    let vol = e.link.link_info.as_ref().unwrap().volume_id.as_ref().unwrap();
+    assert_eq!(vol.drive_serial_number, 0xDEAD_BEEF);
+    assert_eq!(vol.drive_type, drive_type::REMOVABLE);
+}
+
+#[test]
+fn automatic_destinations_rejects_non_cfb() {
+    assert!(parse_automatic_destinations(b"not a compound file", None).is_none());
+    assert!(parse_automatic_destinations(&[], None).is_none());
+}
+
+#[test]
+fn custom_destinations_splits_embedded_lnks_by_clsid_and_footer() {
+    let lnk1 = removable_lnk(0x1111_1111, "F:\\a.exe");
+    let lnk2 = removable_lnk(0x2222_2222, "G:\\b.exe");
+
+    let mut data = Vec::new();
+    data.extend_from_slice(&2u32.to_le_bytes()); // format version 2
+    data.extend_from_slice(&1u32.to_le_bytes()); // category count
+    data.extend_from_slice(&0u32.to_le_bytes()); // @8 unknown
+    // A user-tasks category (type 2): count + two shell objects (CLSID + LNK).
+    data.extend_from_slice(&2u32.to_le_bytes()); // category type = user tasks
+    data.extend_from_slice(&2u32.to_le_bytes()); // number of entries
+    data.extend_from_slice(&clsid_le()); // CLSID prefix for entry 1
+    data.extend_from_slice(&lnk1);
+    data.extend_from_slice(&clsid_le()); // CLSID prefix for entry 2
+    data.extend_from_slice(&lnk2);
+    data.extend_from_slice(&0xBABF_FBABu32.to_le_bytes()); // footer signature
+
+    let jl = parse_custom_destinations(&data, Some("5d696d521de238c3.customDestinations-ms"))
+        .expect("valid custom-destinations");
+    assert_eq!(jl.kind, JumpListKind::Custom);
+    assert_eq!(jl.app_id.as_deref(), Some("5d696d521de238c3"));
+    assert_eq!(jl.entries.len(), 2, "two embedded LNKs split out");
+    let serials: Vec<u32> = jl
+        .entries
+        .iter()
+        .filter_map(|e| {
+            e.link
+                .link_info
+                .as_ref()
+                .and_then(|i| i.volume_id.as_ref())
+                .map(|v| v.drive_serial_number)
+        })
+        .collect();
+    assert!(serials.contains(&0x1111_1111));
+    assert!(serials.contains(&0x2222_2222));
+}
+
+#[test]
+fn custom_destinations_rejects_wrong_version() {
+    let mut data = Vec::new();
+    data.extend_from_slice(&9u32.to_le_bytes()); // wrong version
+    data.extend_from_slice(&[0u8; 8]);
+    assert!(parse_custom_destinations(&data, None).is_none());
+}
+
+/// The LNK CLSID in little-endian wire form, for building custom-destinations.
+fn clsid_le() -> Vec<u8> {
+    CLSID_BYTES.to_vec()
+}
