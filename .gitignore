@@ -1,5 +1,10 @@
 /target
 Cargo.lock
+/site
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
 tests/data/*
 !tests/data/README.md
 !tests/data/*.lnk
+!tests/data/gen_lnk.rs
