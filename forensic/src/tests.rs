@@ -200,3 +200,182 @@ fn source_stamps_analyzer_and_version() {
     assert_eq!(s.scope, "volume: E:");
     assert!(s.version.is_some());
 }
+
+// ── Jump List audit ───────────────────────────────────────────────────────────
+
+use lnk_core::{DestListEntry, JumpList, JumpListEntry, JumpListKind};
+
+fn destlist(hostname: &str, pinned: bool, access_count: Option<u32>, last_access: i64) -> DestListEntry {
+    DestListEntry {
+        droid_volume_guid: "11111111-2222-3333-4444-555555555555".to_string(),
+        droid_file_guid: "66666666-7777-8888-9999-AAAAAAAAAAAA".to_string(),
+        birth_droid_volume_guid: "11111111-2222-3333-4444-555555555555".to_string(),
+        birth_droid_file_guid: "66666666-7777-8888-9999-AAAAAAAAAAAA".to_string(),
+        hostname: hostname.to_string(),
+        entry_number: 1,
+        last_access,
+        pinned,
+        access_count,
+        path: "E:\\payload.exe".to_string(),
+    }
+}
+
+fn jumplist(app_id: Option<&str>, entries: Vec<JumpListEntry>) -> JumpList {
+    JumpList {
+        kind: JumpListKind::Automatic,
+        app_id: app_id.map(str::to_string),
+        entries,
+    }
+}
+
+fn entry(destlist: Option<DestListEntry>, info: Option<LinkInfo>) -> JumpListEntry {
+    JumpListEntry {
+        destlist,
+        link: link(info, None),
+    }
+}
+
+fn jl_codes(f: &[Finding]) -> Vec<String> {
+    f.iter().map(|x| x.code.to_string()).collect()
+}
+
+#[test]
+fn pinned_target_fires_low_provenance() {
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("HOST", true, Some(3), 1)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("HOST"), "jumplist: explorer");
+    let codes = jl_codes(&f);
+    assert!(codes.iter().any(|c| c == "JUMPLIST-PINNED-TARGET"));
+    let pinned = f.iter().find(|x| x.code == "JUMPLIST-PINNED-TARGET").unwrap();
+    assert_eq!(pinned.severity, Some(Severity::Low));
+    assert_eq!(pinned.category, Category::Provenance);
+}
+
+#[test]
+fn unpinned_target_does_not_fire_pinned() {
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("HOST", false, Some(3), 1)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("HOST"), "scope");
+    assert!(!jl_codes(&f).iter().any(|c| c == "JUMPLIST-PINNED-TARGET"));
+}
+
+#[test]
+fn cross_machine_fires_when_hostname_differs_from_acquisition_host() {
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("OTHER-PC", false, None, 1)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("ACQUISITION-HOST"), "scope");
+    let cm = f
+        .iter()
+        .find(|x| x.code == "JUMPLIST-CROSS-MACHINE")
+        .expect("cross-machine fires");
+    assert_eq!(cm.severity, Some(Severity::Low));
+    assert_eq!(cm.category, Category::Provenance);
+    // States "no match to acquisition host", never "belongs to another machine".
+    let note = cm.note.to_ascii_lowercase();
+    assert!(note.contains("no match") || note.contains("does not match"));
+    assert!(!note.contains("belongs to another machine"));
+}
+
+#[test]
+fn cross_machine_does_not_fire_when_hostname_matches_acquisition_host() {
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("ACQ", false, None, 1)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("acq"), "scope"); // case-insensitive match
+    assert!(!jl_codes(&f).iter().any(|c| c == "JUMPLIST-CROSS-MACHINE"));
+}
+
+#[test]
+fn mru_recency_fires_info_history_with_access_count() {
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("HOST", false, Some(42), 1_700_000_000)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("HOST"), "scope");
+    let mru = f
+        .iter()
+        .find(|x| x.code == "JUMPLIST-MRU-RECENCY")
+        .expect("mru recency fires");
+    assert_eq!(mru.severity, Some(Severity::Info));
+    assert_eq!(mru.category, Category::History);
+    assert!(mru.note.contains("42"));
+}
+
+#[test]
+fn appid_identified_fires_when_appid_resolves() {
+    let jl = jumplist(
+        Some("1b4dd67f29cb1962"), // Windows Explorer
+        vec![entry(Some(destlist("HOST", false, None, 1)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("HOST"), "scope");
+    let appid = f
+        .iter()
+        .find(|x| x.code == "JUMPLIST-APPID-IDENTIFIED")
+        .expect("appid identified fires");
+    assert_eq!(appid.severity, Some(Severity::Info));
+    assert_eq!(appid.category, Category::Provenance);
+    assert!(appid.note.contains("Windows Explorer"));
+}
+
+#[test]
+fn unknown_appid_does_not_fire_identified() {
+    let jl = jumplist(
+        Some("ffffffffffffffff"),
+        vec![entry(Some(destlist("HOST", false, None, 1)), None)],
+    );
+    let f = audit_jumplist(&jl, Some("HOST"), "scope");
+    assert!(!jl_codes(&f)
+        .iter()
+        .any(|c| c == "JUMPLIST-APPID-IDENTIFIED"));
+}
+
+#[test]
+fn embedded_link_audit_runs_for_free_removable_finding() {
+    // A removable embedded LNK must surface the existing LNK-REMOVABLE finding
+    // when the Jump List is audited — the per-link audit is reused.
+    let removable = LinkInfo {
+        volume_id: Some(VolumeId {
+            drive_type: drive_type::REMOVABLE,
+            drive_serial_number: 0xDEAD_BEEF,
+            volume_label: None,
+        }),
+        local_base_path: Some("E:\\payload.exe".to_string()),
+        common_network_relative_link: None,
+    };
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("HOST", false, None, 1)), Some(removable))],
+    );
+    let f = audit_jumplist(&jl, Some("HOST"), "scope");
+    assert!(
+        jl_codes(&f).iter().any(|c| c == "LNK-REMOVABLE-MEDIA-TARGET"),
+        "embedded LNK audit reused"
+    );
+}
+
+#[test]
+fn jumplist_findings_are_hedged_never_verdicts() {
+    let jl = jumplist(
+        Some("1b4dd67f29cb1962"),
+        vec![entry(
+            Some(destlist("OTHER-PC", true, Some(5), 1_700_000_000)),
+            None,
+        )],
+    );
+    let f = audit_jumplist(&jl, Some("ACQ-HOST"), "scope");
+    assert!(!f.is_empty());
+    for finding in &f {
+        let note = finding.note.to_ascii_lowercase();
+        assert!(note.contains("consistent with"), "must hedge: {note}");
+        for forbidden in ["proves", "confirms", "definitely"] {
+            assert!(!note.contains(forbidden), "must not assert a verdict: {note}");
+        }
+    }
+}
