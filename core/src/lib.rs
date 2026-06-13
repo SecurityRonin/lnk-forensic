@@ -23,6 +23,12 @@
 
 use forensicnomicon::shlink;
 
+mod jumplist;
+pub use jumplist::{
+    parse_automatic_destinations, parse_custom_destinations, DestListEntry, JumpList,
+    JumpListEntry, JumpListKind,
+};
+
 /// The number of 100-nanosecond intervals between the Windows FILETIME epoch
 /// (1601-01-01) and the Unix epoch (1970-01-01).
 const FILETIME_UNIX_DELTA_100NS: i64 = 116_444_736_000_000_000;
