@@ -17,7 +17,7 @@ exclude = ["/fuzz", "/.github", "/docs"]
 [dependencies]
 # Path dep so the build sees forensicnomicon 0.5.1's `jumplist` module before it
 # is published; switch back to the registry `"0.5.1"` before publishing lnk-core.
-forensicnomicon = { path = "../../forensicnomicon" }
+forensicnomicon = "0.5.1"
 # cfb — the mature MIT OLE Compound-File reader. Jump List
 # *.automaticDestinations-ms files are CFB compound files; DRY, do not reinvent.
 cfb = "0.14"

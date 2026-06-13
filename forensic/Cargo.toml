@@ -18,7 +18,7 @@ exclude = ["/fuzz", "/.github", "/docs"]
 lnk-core = { version = "0.2", path = "../core" }
 # Path dep so the build sees forensicnomicon 0.5.1's `jumplist` module before it
 # is published; switch back to the registry `"0.5.1"` before publishing.
-forensicnomicon = { path = "../../forensicnomicon" }
+forensicnomicon = "0.5.1"
 
 [lints]
 workspace = true
