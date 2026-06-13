@@ -1,0 +1,22 @@
+[package]
+name = "lnk-forensic"
+version = "0.1.0"
+description = "Forensic anomaly auditor for Windows Shell Link (.lnk) files — removable-media targets (volume serial join key to peripheral-forensic), network-share targets, and TrackerDataBlock machine attribution as graded report::Finding, built on lnk-core"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository = "https://github.com/SecurityRonin/lnk-forensic"
+homepage = "https://github.com/SecurityRonin/lnk-forensic"
+documentation = "https://docs.rs/lnk-forensic"
+readme = "README.md"
+keywords = ["forensics", "lnk", "shell-link", "dfir", "incident-response"]
+categories = ["parser-implementations", "filesystem"]
+exclude = ["/fuzz", "/.github", "/docs"]
+
+[dependencies]
+lnk-core = { version = "0.1", path = "../core" }
+forensicnomicon = "0.5"
+
+[lints]
+workspace = true

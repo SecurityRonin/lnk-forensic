@@ -1,0 +1,21 @@
+[package]
+name = "lnk-core"
+version = "0.1.0"
+description = "Windows Shell Link (.lnk) reader: parse [MS-SHLLINK] header, LinkInfo (volume serial, drive type, local base path), StringData, and ExtraData (TrackerDataBlock machine_id / droid GUIDs) into a typed ShellLink"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository = "https://github.com/SecurityRonin/lnk-forensic"
+homepage = "https://github.com/SecurityRonin/lnk-forensic"
+documentation = "https://docs.rs/lnk-core"
+readme = "README.md"
+keywords = ["forensics", "lnk", "shell-link", "dfir", "windows"]
+categories = ["parser-implementations", "filesystem"]
+exclude = ["/fuzz", "/.github", "/docs"]
+
+[dependencies]
+forensicnomicon = "0.5"
+
+[lints]
+workspace = true
