@@ -359,3 +359,282 @@ fn full_link_round_trips_all_sections() {
     assert_eq!(link.string_data.name.as_deref(), Some("Shortcut"));
     assert_eq!(link.tracker.unwrap().machine_id, "DESKTOP-7");
 }
+
+fn utf16le_z(s: &str) -> Vec<u8> {
+    let mut v = Vec::new();
+    for u in s.encode_utf16() {
+        v.extend_from_slice(&u.to_le_bytes());
+    }
+    v.extend_from_slice(&[0, 0]);
+    v
+}
+
+/// A LinkInfo with a 0x24 header carrying a *Unicode* LocalBasePathUnicode.
+fn link_info_unicode_path(base_path: &str) -> Vec<u8> {
+    let pz = utf16le_z(base_path);
+    let header_size = 0x24u32; // includes the optional Unicode offsets
+    let lbp_unicode_offset = header_size; // path right after the 0x24 header
+    let total = lbp_unicode_offset as usize + pz.len();
+
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes()); // LinkInfoSize
+    li.extend_from_slice(&header_size.to_le_bytes()); // LinkInfoHeaderSize (0x24)
+    li.extend_from_slice(&0x1u32.to_le_bytes()); // VolumeIDAndLocalBasePath
+    li.extend_from_slice(&0u32.to_le_bytes()); // VolumeIDOffset (none)
+    li.extend_from_slice(&0u32.to_le_bytes()); // LocalBasePathOffset (ANSI, none)
+    li.extend_from_slice(&0u32.to_le_bytes()); // CommonNetworkRelativeLinkOffset
+    li.extend_from_slice(&0u32.to_le_bytes()); // CommonPathSuffixOffset
+    li.extend_from_slice(&lbp_unicode_offset.to_le_bytes()); // LocalBasePathOffsetUnicode (+0x1C)
+    li.extend_from_slice(&0u32.to_le_bytes()); // CommonPathSuffixOffsetUnicode (+0x20)
+    li.extend_from_slice(&pz);
+    assert_eq!(li.len(), total);
+    li
+}
+
+#[test]
+fn parses_unicode_local_base_path() {
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&link_info_unicode_path("E:\\naïve\\café.exe"));
+    data.extend_from_slice(&TERMINAL);
+    let link = parse_shell_link(&data).unwrap();
+    assert_eq!(
+        link.link_info.unwrap().local_base_path.as_deref(),
+        Some("E:\\naïve\\café.exe")
+    );
+}
+
+/// A VolumeID whose label is Unicode (VolumeLabelOffset == 0x14).
+fn volume_id_unicode_label(label: &str) -> Vec<u8> {
+    let lz = utf16le_z(label);
+    let uni_off = 0x14u32; // Unicode label data begins at VolumeID+0x14
+    let size = uni_off as usize + lz.len();
+    let mut vol = Vec::new();
+    vol.extend_from_slice(&(size as u32).to_le_bytes()); // VolumeIDSize
+    vol.extend_from_slice(&drive_type::FIXED.to_le_bytes()); // DriveType
+    vol.extend_from_slice(&0xCAFE_F00Du32.to_le_bytes()); // DriveSerialNumber
+    vol.extend_from_slice(&0x14u32.to_le_bytes()); // VolumeLabelOffset = 0x14 → Unicode
+    vol.extend_from_slice(&uni_off.to_le_bytes()); // VolumeLabelOffsetUnicode
+    vol.extend_from_slice(&lz);
+    vol
+}
+
+#[test]
+fn parses_unicode_volume_label() {
+    let vol = volume_id_unicode_label("DISQUE É");
+    let header_size = 0x1Cu32;
+    let voff = header_size;
+    let total = voff as usize + vol.len();
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes());
+    li.extend_from_slice(&header_size.to_le_bytes());
+    li.extend_from_slice(&0x1u32.to_le_bytes()); // VolumeIDAndLocalBasePath
+    li.extend_from_slice(&voff.to_le_bytes()); // VolumeIDOffset
+    li.extend_from_slice(&0u32.to_le_bytes()); // LocalBasePathOffset (none)
+    li.extend_from_slice(&0u32.to_le_bytes()); // CNRLOffset
+    li.extend_from_slice(&0u32.to_le_bytes()); // CommonPathSuffixOffset
+    li.extend_from_slice(&vol);
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let link = parse_shell_link(&data).unwrap();
+    let v = link.link_info.unwrap().volume_id.unwrap();
+    assert_eq!(v.drive_serial_number, 0xCAFE_F00D);
+    assert_eq!(v.volume_label.as_deref(), Some("DISQUE É"));
+    // Local base path is absent (both ANSI and Unicode offsets are zero).
+}
+
+#[test]
+fn link_info_too_small_yields_no_link_info() {
+    // LinkInfoSize < 0x1C → parse_link_info returns None (header keeps parsing).
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    let mut li = Vec::new();
+    li.extend_from_slice(&0x10u32.to_le_bytes()); // declared size 0x10 (< 0x1C)
+    li.extend_from_slice(&[0u8; 0x0C]);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let link = parse_shell_link(&data).unwrap();
+    assert!(link.link_info.is_none());
+}
+
+#[test]
+fn undersize_volume_id_yields_no_volume() {
+    // VolumeIDSize < 0x10 → parse_volume_id returns None.
+    let header_size = 0x1Cu32;
+    let voff = header_size;
+    let mut vol = Vec::new();
+    vol.extend_from_slice(&0x08u32.to_le_bytes()); // size 8 (< 0x10)
+    vol.extend_from_slice(&[0u8; 4]);
+    let total = voff as usize + vol.len();
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes());
+    li.extend_from_slice(&header_size.to_le_bytes());
+    li.extend_from_slice(&0x1u32.to_le_bytes());
+    li.extend_from_slice(&voff.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes()); // LocalBasePathOffset 0 → None branch
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&vol);
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let link = parse_shell_link(&data).unwrap();
+    let info = link.link_info.unwrap();
+    assert!(info.volume_id.is_none());
+    assert!(info.local_base_path.is_none());
+}
+
+#[test]
+fn undersize_cnrl_yields_no_network_link() {
+    // CommonNetworkRelativeLinkSize < 0x14 → parse_cnrl returns None.
+    let header_size = 0x1Cu32;
+    let coff = header_size;
+    let mut cnrl = Vec::new();
+    cnrl.extend_from_slice(&0x08u32.to_le_bytes()); // size 8 (< 0x14)
+    cnrl.extend_from_slice(&[0u8; 4]);
+    let total = coff as usize + cnrl.len();
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes());
+    li.extend_from_slice(&header_size.to_le_bytes());
+    li.extend_from_slice(&0x2u32.to_le_bytes()); // CNRLAndPathSuffix
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&coff.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&cnrl);
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let link = parse_shell_link(&data).unwrap();
+    assert!(link
+        .link_info
+        .unwrap()
+        .common_network_relative_link
+        .is_none());
+}
+
+#[test]
+fn cnrl_without_valid_device_omits_device_name() {
+    // ValidDevice flag clear → device_name is None even with a non-zero offset.
+    let header_size = 0x1Cu32;
+    let coff = header_size;
+    let mut nz: Vec<u8> = "\\\\HOST\\s".bytes().collect();
+    nz.push(0);
+    let cnrl_header = 0x14u32;
+    let net_name_offset = cnrl_header;
+    let device_name_offset = cnrl_header + nz.len() as u32; // set, but flag clear
+    let cnrl_size = device_name_offset as usize + 2;
+    let mut cnrl = Vec::new();
+    cnrl.extend_from_slice(&(cnrl_size as u32).to_le_bytes());
+    cnrl.extend_from_slice(&0u32.to_le_bytes()); // Flags: ValidDevice CLEAR
+    cnrl.extend_from_slice(&net_name_offset.to_le_bytes());
+    cnrl.extend_from_slice(&device_name_offset.to_le_bytes());
+    cnrl.extend_from_slice(&0u32.to_le_bytes()); // NetworkProviderType
+    cnrl.extend_from_slice(&nz);
+    cnrl.extend_from_slice(&[0, 0]);
+
+    let total = coff as usize + cnrl.len();
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes());
+    li.extend_from_slice(&header_size.to_le_bytes());
+    li.extend_from_slice(&0x2u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&coff.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&cnrl);
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let link = parse_shell_link(&data).unwrap();
+    let c = link
+        .link_info
+        .unwrap()
+        .common_network_relative_link
+        .unwrap();
+    assert_eq!(c.net_name.as_deref(), Some("\\\\HOST\\s"));
+    assert!(c.device_name.is_none());
+}
+
+#[test]
+fn volume_id_with_zero_label_offset_has_no_label() {
+    // VolumeLabelOffset == 0 → the label is None (line ~436).
+    let header_size = 0x1Cu32;
+    let voff = header_size;
+    let mut vol = Vec::new();
+    vol.extend_from_slice(&0x10u32.to_le_bytes()); // VolumeIDSize 0x10
+    vol.extend_from_slice(&drive_type::FIXED.to_le_bytes());
+    vol.extend_from_slice(&0xABCD_0123u32.to_le_bytes());
+    vol.extend_from_slice(&0u32.to_le_bytes()); // VolumeLabelOffset = 0
+    let total = voff as usize + vol.len();
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes());
+    li.extend_from_slice(&header_size.to_le_bytes());
+    li.extend_from_slice(&0x1u32.to_le_bytes());
+    li.extend_from_slice(&voff.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&vol);
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let v = parse_shell_link(&data)
+        .unwrap()
+        .link_info
+        .unwrap()
+        .volume_id
+        .unwrap();
+    assert_eq!(v.drive_serial_number, 0xABCD_0123);
+    assert!(v.volume_label.is_none());
+}
+
+#[test]
+fn cnrl_with_zero_net_name_offset_has_no_net_name() {
+    // NetNameOffset == 0 → net_name is None (line ~462).
+    let header_size = 0x1Cu32;
+    let coff = header_size;
+    let mut cnrl = Vec::new();
+    cnrl.extend_from_slice(&0x14u32.to_le_bytes()); // size exactly 0x14
+    cnrl.extend_from_slice(&0u32.to_le_bytes()); // Flags: ValidDevice clear
+    cnrl.extend_from_slice(&0u32.to_le_bytes()); // NetNameOffset = 0
+    cnrl.extend_from_slice(&0u32.to_le_bytes()); // DeviceNameOffset = 0
+    cnrl.extend_from_slice(&0u32.to_le_bytes()); // NetworkProviderType
+    let total = coff as usize + cnrl.len();
+    let mut li = Vec::new();
+    li.extend_from_slice(&(total as u32).to_le_bytes());
+    li.extend_from_slice(&header_size.to_le_bytes());
+    li.extend_from_slice(&0x2u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&coff.to_le_bytes());
+    li.extend_from_slice(&0u32.to_le_bytes());
+    li.extend_from_slice(&cnrl);
+
+    let mut data = header(shlink::LINK_FLAG_HAS_LINK_INFO, 0);
+    data.extend_from_slice(&li);
+    data.extend_from_slice(&TERMINAL);
+    let c = parse_shell_link(&data)
+        .unwrap()
+        .link_info
+        .unwrap()
+        .common_network_relative_link
+        .unwrap();
+    assert!(c.net_name.is_none());
+    assert!(c.device_name.is_none());
+}
+
+#[test]
+fn undersize_extra_block_terminates_walk() {
+    // A non-tracker block with size < 0x4, followed by >= 8 trailing bytes, hits
+    // the size-terminator break in the ExtraData walk (line ~512).
+    let mut data = header(0, 0);
+    data.extend_from_slice(&0x02u32.to_le_bytes()); // BlockSize 2 (< 0x4)
+    data.extend_from_slice(&[0u8; 8]); // padding so off+8 <= len holds
+    let link = parse_shell_link(&data).unwrap();
+    assert!(link.tracker.is_none());
+}
