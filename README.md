@@ -12,19 +12,23 @@
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![Security advisories](https://img.shields.io/badge/security-advisories%20clean-brightgreen.svg)](deny.toml)
 
-**Turn a Windows `.lnk` shortcut into graded forensic findings — surface the file opened from a USB stick, the share it came off, and the machine it was authored on, with the volume serial that ties it back to the physical device.**
+**Turn a Windows `.lnk` shortcut — or a whole Jump List — into graded forensic findings — surface the file opened from a USB stick, the share it came off, and the machine it was authored on, with the volume serial that ties it back to the physical device.**
 
 A `.lnk` is a rich `[MS-SHLLINK]` artifact: it records the target path, the volume
 serial and MAC timestamps, the origin machine's NetBIOS name, and a distributed-
 link-tracking droid GUID — often evidence of a file that no longer exists.
 `lnk-forensic` reads it from a link authored on **any** Windows host and grades
-what matters for triage.
+what matters for triage. It also parses **Jump Lists** — the taskbar/Start MRU
+artifact — both `*.automaticDestinations-ms` (an OLE/CFB compound file with a
+`DestList` MRU stream + one embedded `.lnk` per entry) and
+`*.customDestinations-ms` (a flat run of embedded `.lnk`s), reusing the same
+shell-link audit over every embedded link.
 
 ## Audit a Shell Link in 30 seconds
 
 ```toml
 [dependencies]
-lnk-forensic = "0.1"   # pulls in lnk-core
+lnk-forensic = "0.2"   # pulls in lnk-core
 ```
 
 ```rust
@@ -55,6 +59,28 @@ conclusions. Codes are a stable, published contract.
 | `LNK-NETWORK-TARGET` | Low | Threat | The link carries a `CommonNetworkRelativeLink` — consistent with a file opened from a network share (MITRE T1021). |
 | `LNK-TRACKER-MACHINE` | Info | Provenance | The `TrackerDataBlock` records the origin machine's NetBIOS name — consistent with the link having been authored on that machine (attribution). |
 
+## Jump Lists — Automatic + Custom Destinations
+
+`parse_automatic_destinations(bytes, filename)` opens a `*.automaticDestinations-ms`
+as a CFB compound file, reads the `DestList` MRU stream (Windows 7 v1 and
+Windows 10/11 v2+ layouts), and decodes each embedded `.lnk` sub-stream;
+`parse_custom_destinations(bytes, filename)` splits a flat
+`*.customDestinations-ms` into its embedded `.lnk`s by the `[MS-SHLLINK]` CLSID
+and `0xBABFFBAB` footer. `audit_jumplist(&jl, acquisition_host, scope)` runs the
+**existing per-link audit over every embedded link** (so the codes above fire for
+free) plus four Jump-List-level codes:
+
+| Code | Severity | Category | What it observes |
+|---|---|---|---|
+| `JUMPLIST-PINNED-TARGET` | Low | Provenance | A `DestList` entry is **pinned** — consistent with the user having deliberately fixed this target to the application's Jump List. |
+| `JUMPLIST-CROSS-MACHINE` | Low | Provenance | A `DestList` entry's origin hostname (or droid volume GUID) has **no match to the acquisition host** — consistent with the target/artifact having originated on a different machine. |
+| `JUMPLIST-MRU-RECENCY` | Info | History | A `DestList` entry's last-access time + access count — the application's own usage history for the target. |
+| `JUMPLIST-APPID-IDENTIFIED` | Info | Provenance | The Jump List `AppID` resolves to a known application via `forensicnomicon::jumplist::appid_name`. |
+
+The DestList offset tables, the `0xBABFFBAB` footer, the embedded-LNK CLSID
+boundary, and the `AppID` map all come from
+[`forensicnomicon::jumplist`](https://crates.io/crates/forensicnomicon).
+
 ## The volume serial is a cross-artifact join key
 
 A `.lnk`'s `VolumeID.DriveSerialNumber` is the same 32-bit volume serial a USB
@@ -73,11 +99,22 @@ examiner reconciles it.
   show command, hotkey), the `LinkInfo` block (`VolumeID` drive type + serial +
   label, local base path, `CommonNetworkRelativeLink`), ANSI/Unicode `StringData`,
   the raw `LinkTargetIDList` PIDL blob (full PIDL decode is a shellbag parser's
-  job), and the `ExtraData` `TrackerDataBlock`. Format constants come from
-  [`forensicnomicon::shlink`](https://crates.io/crates/forensicnomicon); the
+  job), the `ExtraData` `TrackerDataBlock`, and **Jump Lists** (Automatic + Custom
+  Destinations). Format constants come from
+  [`forensicnomicon::shlink`](https://crates.io/crates/forensicnomicon) and
+  [`forensicnomicon::jumplist`](https://crates.io/crates/forensicnomicon); the
   parsing algorithm lives here. No findings.
-- **`lnk-forensic`** — the analyzer. Audits a `ShellLink` into graded
-  `forensicnomicon::report::Finding`s. Depends on `lnk-core`.
+- **`lnk-forensic`** — the analyzer. Audits a `ShellLink` or a `JumpList` into
+  graded `forensicnomicon::report::Finding`s. Depends on `lnk-core`.
+
+### Third-party dependency note
+
+`lnk-core` depends on the mature MIT-licensed
+[`cfb`](https://crates.io/crates/cfb) crate to read the OLE Compound-File
+container that `*.automaticDestinations-ms` Jump Lists are stored in — a
+documented exception to "prefer our own", on the same footing as `lznt1` for
+NTFS: reusing a correct, maintained, better-scoped reader beats reinventing an
+OLE/CFB parser. Our own code stays `#![forbid(unsafe_code)]`.
 
 ## Trust, but verify
 
@@ -88,13 +125,17 @@ Built for untrusted `.lnk` files from potentially compromised systems:
   bounds-checked; the workspace denies `clippy::unwrap_used` and
   `clippy::expect_used` in production code. A truncated or garbled link yields
   absent sub-structures or `None`, never a crash.
-- **Fuzzed** — `cargo-fuzz` targets `shelllink` (the reader) and `forensic` (the
-  full parse → audit pipeline); a `fuzz.yml` CI workflow builds and smoke-runs
+- **Fuzzed** — `cargo-fuzz` targets `shelllink` (the reader), `forensic` (the
+  full parse → audit pipeline), and `jumplist` (the CFB/DestList + custom-
+  destinations parse → audit); a `fuzz.yml` CI workflow builds and smoke-runs
   each.
 - **Validated against spec-exact artifacts** — the pipeline is exercised
-  end-to-end against hand-authored `[MS-SHLLINK]` fixtures (a removable-media link
-  with a volume serial + a network-share link), with the removable, tracker, and
-  network findings re-surfaced (see `forensic/tests/real_data.rs`).
+  end-to-end against hand-authored fixtures: `[MS-SHLLINK]` links (a removable-
+  media link with a volume serial + a network-share link;
+  `forensic/tests/real_data.rs`) and Jump Lists (a real CFB
+  `*.automaticDestinations-ms` with a pinned, cross-machine removable entry + a
+  flat `*.customDestinations-ms`; `forensic/tests/jumplist.rs`), reconciling the
+  surfaced serial and findings.
 
 ```bash
 cargo test

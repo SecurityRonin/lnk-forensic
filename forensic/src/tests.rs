@@ -361,6 +361,36 @@ fn embedded_link_audit_runs_for_free_removable_finding() {
 }
 
 #[test]
+fn entry_without_destlist_only_audits_embedded_link() {
+    // A custom-destinations-style entry (destlist: None) still audits its
+    // embedded link, but emits no DestList-level findings.
+    let removable = LinkInfo {
+        volume_id: Some(VolumeId {
+            drive_type: drive_type::REMOVABLE,
+            drive_serial_number: 0xCAFE_BABE,
+            volume_label: None,
+        }),
+        local_base_path: Some("E:\\x.exe".to_string()),
+        common_network_relative_link: None,
+    };
+    let jl = jumplist(None, vec![entry(None, Some(removable))]);
+    let f = audit_jumplist(&jl, Some("HOST"), "scope");
+    let codes = jl_codes(&f);
+    assert!(codes.iter().any(|c| c == "LNK-REMOVABLE-MEDIA-TARGET"));
+    assert!(!codes.iter().any(|c| c.starts_with("JUMPLIST-")));
+}
+
+#[test]
+fn no_acquisition_host_skips_cross_machine_check() {
+    let jl = jumplist(
+        None,
+        vec![entry(Some(destlist("OTHER-PC", false, None, 1)), None)],
+    );
+    let f = audit_jumplist(&jl, None, "scope");
+    assert!(!jl_codes(&f).iter().any(|c| c == "JUMPLIST-CROSS-MACHINE"));
+}
+
+#[test]
 fn jumplist_findings_are_hedged_never_verdicts() {
     let jl = jumplist(
         Some("1b4dd67f29cb1962"),

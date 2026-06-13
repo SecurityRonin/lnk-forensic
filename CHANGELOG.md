@@ -6,6 +6,55 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [lnk-core 0.2.0 / lnk-forensic 0.2.0] — 2026-06-13
+
+### Added — `lnk-core` (reader)
+
+- **Jump Lists.** `parse_automatic_destinations(&[u8], Option<&str>) -> Option<JumpList>`
+  opens a `*.automaticDestinations-ms` as an OLE/CFB compound file (via the `cfb`
+  crate), reads the `DestList` MRU stream (Windows 7 v1 and Windows 10/11 v2+
+  layouts), and decodes each hex-named embedded `.lnk` sub-stream with
+  `parse_shell_link`. `parse_custom_destinations(&[u8], Option<&str>) -> Option<JumpList>`
+  splits a flat `*.customDestinations-ms` into its embedded `.lnk`s by the
+  `[MS-SHLLINK]` CLSID prefix and the `0xBABFFBAB` footer (declared sizes are
+  treated as unreliable).
+- New types: `JumpList`, `JumpListKind` (`Automatic` / `Custom`), `JumpListEntry`,
+  and `DestListEntry` (droid + birth-droid volume/file GUIDs, hostname,
+  entry number, last-access, pinned, access count, path). DestList paths are
+  decoded **lossily** (unpaired surrogates occur).
+- Offset tables, the footer signature, the embedded-LNK CLSID boundary, and the
+  `AppID` map come from `forensicnomicon::jumplist` (knowledge-only).
+
+### Added — `lnk-forensic` (analyzer)
+
+- `audit_jumplist(&JumpList, Option<&str>, scope) -> Vec<Finding>` runs the
+  existing per-link `audit` over **every** embedded link (removable / network /
+  tracker findings come for free) plus four Jump-List-level codes:
+  - `JUMPLIST-PINNED-TARGET` (Low / Provenance) — a pinned `DestList` entry.
+  - `JUMPLIST-CROSS-MACHINE` (Low / Provenance) — an origin hostname with no
+    match to the acquisition host.
+  - `JUMPLIST-MRU-RECENCY` (Info / History) — last-access + access count.
+  - `JUMPLIST-APPID-IDENTIFIED` (Info / Provenance) — the `AppID` resolves via
+    `forensicnomicon::jumplist::appid_name`.
+- All notes are hedged observations ("consistent with"); the cross-machine note
+  states "no match to the acquisition host", never "belongs to another machine".
+
+### Dependencies
+
+- `lnk-core` adds the mature MIT-licensed [`cfb`](https://crates.io/crates/cfb)
+  crate for OLE Compound-File reading (Automatic Destinations) — a documented
+  "prefer our own" exception, on the same footing as `lznt1` for NTFS. Our code
+  stays `#![forbid(unsafe_code)]`.
+- Requires `forensicnomicon` ≥ 0.5.1 for the `jumplist` knowledge module.
+
+### Security / Testing
+
+- New `cargo-fuzz` target `jumplist` (invariant: must not panic) over the
+  CFB/DestList + custom-destinations parse → audit pipeline.
+- Validated end-to-end against spec-exact fixtures: a real CFB
+  `*.automaticDestinations-ms` (pinned, cross-machine, removable embedded LNK)
+  and a flat `*.customDestinations-ms` (`forensic/tests/jumplist.rs`).
+
 ## [lnk-core 0.1.0 / lnk-forensic 0.1.0] — 2026-06-13
 
 ### Added — `lnk-core` (reader)

@@ -7,4 +7,7 @@ fuzz/artifacts
 tests/data/*
 !tests/data/README.md
 !tests/data/*.lnk
+!tests/data/*.automaticDestinations-ms
+!tests/data/*.customDestinations-ms
 !tests/data/gen_lnk.rs
+!tests/data/gen_jumplist.rs

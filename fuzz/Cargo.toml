@@ -24,4 +24,10 @@ path = "fuzz_targets/forensic.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "jumplist"
+path = "fuzz_targets/jumplist.rs"
+test = false
+doc = false
+
 [workspace]

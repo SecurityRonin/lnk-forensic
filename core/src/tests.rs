@@ -804,3 +804,125 @@ fn custom_destinations_rejects_wrong_version() {
 fn clsid_le() -> Vec<u8> {
     CLSID_BYTES.to_vec()
 }
+
+/// Build one v1 (Windows 7) DestList entry — no status/access-count block; the
+/// path-size sits at @112 and there is no trailing alignment.
+fn destlist_entry_v1(entry_number: u32, hostname: &str, path: &str) -> Vec<u8> {
+    let mut e = vec![0u8; 8]; // 0..8 unknown
+    e.extend_from_slice(&guid_le_bytes("11111111-2222-3333-4444-555555555555"));
+    e.extend_from_slice(&guid_le_bytes("66666666-7777-8888-9999-aaaaaaaaaaaa"));
+    e.extend_from_slice(&guid_le_bytes("11111111-2222-3333-4444-555555555555"));
+    e.extend_from_slice(&guid_le_bytes("66666666-7777-8888-9999-aaaaaaaaaaaa"));
+    let mut host = [0u8; 16];
+    for (i, c) in hostname.bytes().take(15).enumerate() {
+        host[i] = c;
+    }
+    e.extend_from_slice(&host); // @72
+    e.extend_from_slice(&entry_number.to_le_bytes()); // @88
+    e.extend_from_slice(&0u32.to_le_bytes()); // @92
+    e.extend_from_slice(&0u32.to_le_bytes()); // @96
+    e.extend_from_slice(&filetime_bytes(1_600_000_000)); // @100 last access
+    e.extend_from_slice(&(-1i32).to_le_bytes()); // @108 pin status (unpinned)
+    let units: Vec<u16> = path.encode_utf16().collect();
+    e.extend_from_slice(&(units.len() as u16).to_le_bytes()); // @112 path size
+    for u in &units {
+        e.extend_from_slice(&u.to_le_bytes()); // @114 path
+    }
+    e
+}
+
+fn destlist_stream_v1(entry: &[u8]) -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&1u32.to_le_bytes()); // format version 1 (Win7)
+    s.extend_from_slice(&1u32.to_le_bytes()); // entry count
+    s.extend_from_slice(&0u32.to_le_bytes()); // pinned count
+    s.extend_from_slice(&[0u8; 20]); // remaining header to 32 bytes
+    assert_eq!(s.len(), 32);
+    s.extend_from_slice(entry);
+    s
+}
+
+#[test]
+fn automatic_destinations_v1_layout_parses_path_and_unpinned() {
+    let lnk = removable_lnk(0x0BAD_F00D, "D:\\old.txt");
+    let entry = destlist_entry_v1(1, "WIN7-PC", "D:\\old.txt");
+    let destlist = destlist_stream_v1(&entry);
+    let cfb_bytes = build_automatic_cfb(&destlist, 1, &lnk);
+
+    let jl = parse_automatic_destinations(&cfb_bytes, None).expect("valid v1 CFB");
+    assert_eq!(jl.entries.len(), 1);
+    let dl = jl.entries[0].destlist.as_ref().unwrap();
+    assert_eq!(dl.path, "D:\\old.txt");
+    assert_eq!(dl.hostname, "WIN7-PC");
+    assert!(!dl.pinned);
+    assert_eq!(dl.access_count, None, "v1 has no access count");
+}
+
+#[test]
+fn automatic_destinations_skips_entry_with_missing_lnk_substream() {
+    // DestList references entry 1, but no "1" sub-stream is written.
+    let entry = destlist_entry_v2(1, "HOST", false, 1, "X:\\gone.bin");
+    let destlist = destlist_stream_v2(&entry);
+    use std::io::{Cursor, Write};
+    let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+    comp.create_stream("DestList")
+        .unwrap()
+        .write_all(&destlist)
+        .unwrap();
+    comp.flush().unwrap();
+    let bytes = comp.into_inner().into_inner();
+
+    let jl = parse_automatic_destinations(&bytes, None).expect("valid CFB");
+    assert!(jl.entries.is_empty(), "missing LNK sub-stream yields no entry");
+}
+
+#[test]
+fn automatic_destinations_skips_entry_with_invalid_lnk() {
+    // The "1" sub-stream exists but is not a valid LNK (bad header).
+    let entry = destlist_entry_v2(1, "HOST", false, 1, "X:\\bad.bin");
+    let destlist = destlist_stream_v2(&entry);
+    let garbage = vec![0xFFu8; 80];
+    let bytes = build_automatic_cfb(&destlist, 1, &garbage);
+
+    let jl = parse_automatic_destinations(&bytes, None).expect("valid CFB");
+    assert!(jl.entries.is_empty(), "invalid embedded LNK yields no entry");
+}
+
+#[test]
+fn automatic_destinations_non_hex_filename_yields_no_appid() {
+    let lnk = removable_lnk(0xDEAD_BEEF, "E:\\x");
+    let entry = destlist_entry_v2(1, "HOST", false, 1, "E:\\x");
+    let destlist = destlist_stream_v2(&entry);
+    let bytes = build_automatic_cfb(&destlist, 1, &lnk);
+
+    // A filename whose stem is not hex (contains 'z') produces no app_id.
+    let jl = parse_automatic_destinations(&bytes, Some("zzz.automaticDestinations-ms")).unwrap();
+    assert_eq!(jl.app_id, None);
+}
+
+#[test]
+fn custom_destinations_without_footer_parses_to_end_of_buffer() {
+    let lnk = removable_lnk(0x1357_2468, "F:\\a.exe");
+    let mut data = Vec::new();
+    data.extend_from_slice(&2u32.to_le_bytes()); // version 2
+    data.extend_from_slice(&1u32.to_le_bytes()); // category count
+    data.extend_from_slice(&0u32.to_le_bytes()); // unknown
+    data.extend_from_slice(&2u32.to_le_bytes()); // user-tasks category
+    data.extend_from_slice(&1u32.to_le_bytes()); // entry count
+    data.extend_from_slice(&clsid_le());
+    data.extend_from_slice(&lnk);
+    // No 0xBABFFBAB footer — the LNK runs to end-of-buffer.
+
+    let jl = parse_custom_destinations(&data, None).expect("valid custom-destinations");
+    assert_eq!(jl.entries.len(), 1);
+    let serial = jl.entries[0]
+        .link
+        .link_info
+        .as_ref()
+        .unwrap()
+        .volume_id
+        .as_ref()
+        .unwrap()
+        .drive_serial_number;
+    assert_eq!(serial, 0x1357_2468);
+}

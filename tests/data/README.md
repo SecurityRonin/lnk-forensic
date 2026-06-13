@@ -38,6 +38,49 @@ CommonNetworkRelativeLink, §2.4 StringData, §2.5.10 TrackerDataBlock).
   `CommonNetworkRelativeLink` (`NetName = \\SERVER\share`, `DeviceName = Z:`).
   Exercises `LNK-NETWORK-TARGET`.
 
+### `pinned_removable.automaticDestinations-ms` — SYNTHETIC (`✓` confirmed)
+
+- **Classification:** SYNTHETIC (spec-exact hand-authored, real CFB container).
+- **Contents:** a genuine OLE/CFB compound file (built with the `cfb` crate)
+  holding a `DestList` v2 (Windows 10, `FormatVersion = 3`) stream with one
+  **pinned** entry — origin hostname `OTHER-PC` (redacted placeholder, not a real
+  machine), access count `7`, path `E:\report.docx` — plus a hex-named `1`
+  sub-stream carrying a removable-media `.lnk` (`VolumeID` `DRIVE_REMOVABLE`,
+  serial `0xDEADBEEF`). Exercises the CFB/DestList automatic path: pinned,
+  cross-machine (vs. the test's acquisition host), MRU-recency, AppID
+  (`1b4dd67f29cb1962` → Windows Explorer), and the reused embedded-LNK
+  `LNK-REMOVABLE-MEDIA-TARGET` finding.
+
+### `tasks.customDestinations-ms` — SYNTHETIC (`✓` confirmed)
+
+- **Classification:** SYNTHETIC (spec-exact hand-authored).
+- **MD5:** see §H of the corpus catalog (192 bytes).
+- **Contents:** a flat custom-destinations file (`FormatVersion = 2`, one
+  user-tasks category) with one embedded shell-object entry — the
+  `[MS-SHLLINK]` CLSID prefix then a removable-media `.lnk` (serial
+  `0xDEADBEEF`) — terminated by the `0xBABFFBAB` footer. Exercises the
+  CLSID/footer splitter and the AppID lookup (`5d696d521de238c3` → Chrome).
+
+## Jump List spec + generator (verbatim)
+
+Jump List layout per libyal `dtformats`, *Jump lists format*:
+<https://github.com/libyal/dtformats/blob/main/documentation/Jump%20lists%20format.asciidoc>
+(DestList header/entry, CustomDestinations categories + `0xBABFFBAB` footer).
+The `AppID` → application map is kacos2000's `AppIdlist.csv`
+(<https://github.com/kacos2000/Jumplist-Browser>).
+
+Both Jump List fixtures are produced by the cargo example
+`core/examples/gen_jumplist.rs` (it needs the workspace's `cfb` crate to author
+the automatic-destinations compound file — a plain-`rustc` build cannot):
+
+```sh
+cargo run --example gen_jumplist -p lnk-core
+```
+
+A non-runnable copy of the generator source is kept at
+`tests/data/gen_jumplist.rs` for provenance. **No real user's Jump List is
+committed** — every hostname/serial/path above is a synthetic placeholder.
+
 ## Generator (verbatim)
 
 Both files are produced by the standalone Rust program `gen_lnk.rs` (the same

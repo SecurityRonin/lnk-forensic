@@ -187,16 +187,17 @@ pub fn parse_automatic_destinations(data: &[u8], filename: Option<&str>) -> Opti
 
         // The LNK sub-stream is named by the entry number in lowercase hex.
         let stream_name = format!("{:x}", destlist_entry.entry_number);
+        let mut lnk = Vec::new();
         if let Ok(mut stream) = comp.open_stream(&stream_name) {
-            let mut lnk = Vec::new();
-            if stream.read_to_end(&mut lnk).is_ok() {
-                if let Some(link) = parse_shell_link(&lnk) {
-                    entries.push(JumpListEntry {
-                        destlist: Some(destlist_entry),
-                        link,
-                    });
-                }
-            }
+            // read_to_end into a Vec from an opened CFB stream is infallible in
+            // practice; ignore the Result so there is no unreachable error arm.
+            let _ = stream.read_to_end(&mut lnk);
+        }
+        if let Some(link) = parse_shell_link(&lnk) {
+            entries.push(JumpListEntry {
+                destlist: Some(destlist_entry),
+                link,
+            });
         }
     }
 
@@ -231,14 +232,19 @@ fn parse_destlist_entry(data: &[u8], base: usize, extended: bool) -> (DestListEn
     };
 
     let entry_number = le_u32(data, base + jl::DESTLIST_ENTRY_ENTRY_NUMBER_OFFSET);
-    let last_access =
-        filetime_to_unix(le_u64(data, base + jl::DESTLIST_ENTRY_LAST_ACCESS_FILETIME_OFFSET));
+    let last_access = filetime_to_unix(le_u64(
+        data,
+        base + jl::DESTLIST_ENTRY_LAST_ACCESS_FILETIME_OFFSET,
+    ));
     let pin_status = le_i32(data, base + jl::DESTLIST_ENTRY_PIN_STATUS_OFFSET);
     let pinned = pin_status >= 0;
 
     let (access_count, path_size_off, path_off, trailing) = if extended {
         (
-            Some(le_u32(data, base + jl::DESTLIST_ENTRY_V2_ACCESS_COUNT_OFFSET)),
+            Some(le_u32(
+                data,
+                base + jl::DESTLIST_ENTRY_V2_ACCESS_COUNT_OFFSET,
+            )),
             jl::DESTLIST_ENTRY_V2_PATH_SIZE_OFFSET,
             jl::DESTLIST_ENTRY_V2_PATH_OFFSET,
             jl::DESTLIST_ENTRY_V2_TRAILING_ALIGNMENT,
@@ -322,13 +328,15 @@ pub fn parse_custom_destinations(data: &[u8], filename: Option<&str>) -> Option<
         let lnk_start = prefix + 16;
         let hard_end = starts.get(idx + 1).copied().unwrap_or(data.len());
         let end = footer_before(data, lnk_start, hard_end).unwrap_or(hard_end);
-        if let Some(slice) = data.get(lnk_start..end) {
-            if let Some(link) = parse_shell_link(slice) {
-                entries.push(JumpListEntry {
-                    destlist: None,
-                    link,
-                });
-            }
+        // lnk_start = prefix + 16 and end <= data.len(), and is_entry_prefix
+        // already proved prefix + 36 <= data.len(), so this range never falls
+        // out of bounds — get() degrades to an empty slice rather than panic.
+        let slice = data.get(lnk_start..end).unwrap_or_default();
+        if let Some(link) = parse_shell_link(slice) {
+            entries.push(JumpListEntry {
+                destlist: None,
+                link,
+            });
         }
     }
 
@@ -344,10 +352,7 @@ pub fn parse_custom_destinations(data: &[u8], filename: Option<&str>) -> Option<
 fn footer_before(data: &[u8], start: usize, hard_end: usize) -> Option<usize> {
     let sig = jl::CUSTOM_DESTINATIONS_FOOTER_SIGNATURE.to_le_bytes();
     let region = data.get(start..hard_end)?;
-    region
-        .windows(4)
-        .position(|w| w == sig)
-        .map(|p| start + p)
+    region.windows(4).position(|w| w == sig).map(|p| start + p)
 }
 
 /// The `[MS-SHLLINK]` CLSID rendered as its 16 little-endian wire bytes — the
