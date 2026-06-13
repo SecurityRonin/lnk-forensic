@@ -330,10 +330,19 @@ pub fn parse_shell_link(data: &[u8]) -> Option<ShellLink> {
             shlink::LINK_FLAG_HAS_NAME,
             &mut string_data.name as &mut Option<String>,
         ),
-        (shlink::LINK_FLAG_HAS_RELATIVE_PATH, &mut string_data.relative_path),
-        (shlink::LINK_FLAG_HAS_WORKING_DIR, &mut string_data.working_dir),
+        (
+            shlink::LINK_FLAG_HAS_RELATIVE_PATH,
+            &mut string_data.relative_path,
+        ),
+        (
+            shlink::LINK_FLAG_HAS_WORKING_DIR,
+            &mut string_data.working_dir,
+        ),
         (shlink::LINK_FLAG_HAS_ARGUMENTS, &mut string_data.arguments),
-        (shlink::LINK_FLAG_HAS_ICON_LOCATION, &mut string_data.icon_location),
+        (
+            shlink::LINK_FLAG_HAS_ICON_LOCATION,
+            &mut string_data.icon_location,
+        ),
     ] {
         if header.has_flag(flag) {
             let (value, next) = read_sized_string(data, off, is_unicode);

@@ -17,7 +17,10 @@ fn removable_fixture_parses_volume_serial_and_local_base_path() {
     let info = link.link_info.as_ref().expect("HasLinkInfo set");
     let vol = info.volume_id.as_ref().expect("VolumeID present");
     assert_eq!(vol.drive_type, drive_type::REMOVABLE);
-    assert_eq!(vol.drive_serial_number, 0xDEAD_BEEF, "drive serial surfaced");
+    assert_eq!(
+        vol.drive_serial_number, 0xDEAD_BEEF,
+        "drive serial surfaced"
+    );
     assert_eq!(vol.volume_label.as_deref(), Some("KINGSTON USB"));
     assert_eq!(info.local_base_path.as_deref(), Some("E:\\payload.exe"));
     // The TrackerDataBlock records the origin machine.
