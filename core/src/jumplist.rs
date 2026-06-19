@@ -28,6 +28,58 @@ use forensicnomicon::shlink;
 
 use crate::{filetime_to_unix, guid_string, parse_shell_link, ShellLink};
 
+/// The structural reason a byte buffer could not be parsed as a Jump List.
+///
+/// The input is an in-memory `&[u8]`, so there is no device I/O to fail — every
+/// failure here is structural ("not a valid CFB", "no DestList stream", "wrong
+/// custom-destinations version"). Each variant carries the offending value so an
+/// investigator who feeds a corrupt `.automaticDestinations-ms` /
+/// `.customDestinations-ms` learns *why* it did not parse instead of a silent
+/// [`None`].
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JumplistError {
+    /// The bytes are not an OLE/CFB compound file. Automatic-destinations Jump
+    /// Lists are CFB; the CFB magic is `D0 CF 11 E0 A1 B1 1A E1`. `found_magic`
+    /// is the first 8 bytes that *were* present (zero-padded if shorter).
+    NotCompoundFile {
+        /// The first 8 bytes of the input (the CFB magic position).
+        found_magic: [u8; 8],
+    },
+    /// The bytes are a valid CFB compound file, but it carries no `DestList`
+    /// stream — so it is not an automatic-destinations Jump List.
+    MissingDestListStream,
+    /// The bytes are not a `customDestinations-ms` file: the 4-byte header format
+    /// version is not [`forensicnomicon::jumplist::CUSTOM_DESTINATIONS_FORMAT_VERSION`].
+    /// `found` is the version value that was actually read.
+    BadCustomFormatVersion {
+        /// The format-version value read from the header.
+        found: u32,
+    },
+}
+
+impl std::fmt::Display for JumplistError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotCompoundFile { found_magic } => write!(
+                f,
+                "not an OLE/CFB compound file (expected magic D0CF11E0A1B11AE1, \
+                 found {found_magic:02X?})"
+            ),
+            Self::MissingDestListStream => {
+                write!(f, "CFB compound file has no DestList stream")
+            }
+            Self::BadCustomFormatVersion { found } => write!(
+                f,
+                "customDestinations header format version is {found}, expected {}",
+                jl::CUSTOM_DESTINATIONS_FORMAT_VERSION
+            ),
+        }
+    }
+}
+
+impl std::error::Error for JumplistError {}
+
 /// Which Jump List family a [`JumpList`] was parsed from.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,15 +212,47 @@ fn appid_from_filename(name: &str) -> Option<String> {
 ///
 /// Returns [`None`] when the bytes are not a valid CFB compound file or carry no
 /// `DestList` stream. Never panics on hostile input.
+///
+/// Lenient wrapper over [`parse_automatic_destinations_checked`]: the structural
+/// reason for a failure is discarded. Use the checked variant to learn *why* a
+/// file did not parse (bad CFB header vs missing `DestList` stream).
 #[must_use]
 pub fn parse_automatic_destinations(data: &[u8], filename: Option<&str>) -> Option<JumpList> {
-    let mut comp = cfb::CompoundFile::open(Cursor::new(data)).ok()?;
+    parse_automatic_destinations_checked(data, filename).ok()
+}
+
+/// Parse a `*.automaticDestinations-ms` Jump List, surfacing the structural
+/// reason for any failure.
+///
+/// - `Err(JumplistError::NotCompoundFile { found_magic })` — the bytes are not a
+///   CFB compound file; `found_magic` carries the first 8 bytes that were there.
+/// - `Err(JumplistError::MissingDestListStream)` — a valid CFB without a
+///   `DestList` stream (so not an automatic-destinations Jump List).
+/// - `Ok(JumpList)` — a parsed Jump List (its `entries` may be empty if no
+///   embedded shell link decoded, but the `DestList` was present).
+///
+/// `app_id` is taken from `filename` when given. Never panics on hostile input.
+pub fn parse_automatic_destinations_checked(
+    data: &[u8],
+    filename: Option<&str>,
+) -> Result<JumpList, JumplistError> {
+    let mut comp = cfb::CompoundFile::open(Cursor::new(data)).map_err(|_| {
+        let mut found_magic = [0u8; 8];
+        let n = data.len().min(8);
+        found_magic[..n].copy_from_slice(&data[..n]);
+        JumplistError::NotCompoundFile { found_magic }
+    })?;
 
     // Read the whole DestList stream into memory (bounded by the CFB layer).
     let destlist = {
-        let mut stream = comp.open_stream("DestList").ok()?;
+        let mut stream = comp
+            .open_stream("DestList")
+            .map_err(|_| JumplistError::MissingDestListStream)?;
         let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).ok()?;
+        // read_to_end into a Vec from an opened CFB stream is infallible in
+        // practice (the bytes are already in memory); ignore the Result so there
+        // is no unreachable error arm to cover.
+        let _ = stream.read_to_end(&mut buf);
         buf
     };
 
@@ -201,7 +285,7 @@ pub fn parse_automatic_destinations(data: &[u8], filename: Option<&str>) -> Opti
         }
     }
 
-    Some(JumpList {
+    Ok(JumpList {
         kind: JumpListKind::Automatic,
         app_id: filename.and_then(appid_from_filename),
         entries,
@@ -288,10 +372,29 @@ fn parse_destlist_entry(data: &[u8], base: usize, extended: bool) -> (DestListEn
 /// entries are returned flat in file order.
 ///
 /// Returns [`None`] when the header format version is not `2`.
+///
+/// Lenient wrapper over [`parse_custom_destinations_checked`]: the structural
+/// reason for a failure is discarded.
 #[must_use]
 pub fn parse_custom_destinations(data: &[u8], filename: Option<&str>) -> Option<JumpList> {
-    if le_u32(data, 0) != jl::CUSTOM_DESTINATIONS_FORMAT_VERSION {
-        return None;
+    parse_custom_destinations_checked(data, filename).ok()
+}
+
+/// Parse a `*.customDestinations-ms` Jump List, surfacing the structural reason
+/// for a failure.
+///
+/// - `Err(JumplistError::BadCustomFormatVersion { found })` — the 4-byte header
+///   format version is not the expected value; `found` is what was read.
+/// - `Ok(JumpList)` — a parsed Jump List (entries in flat file order).
+pub fn parse_custom_destinations_checked(
+    data: &[u8],
+    filename: Option<&str>,
+) -> Result<JumpList, JumplistError> {
+    let format_version = le_u32(data, 0);
+    if format_version != jl::CUSTOM_DESTINATIONS_FORMAT_VERSION {
+        return Err(JumplistError::BadCustomFormatVersion {
+            found: format_version,
+        });
     }
 
     // The 16-byte LNK CLSID, in little-endian wire order, prefixes every
@@ -340,7 +443,7 @@ pub fn parse_custom_destinations(data: &[u8], filename: Option<&str>) -> Option<
         }
     }
 
-    Some(JumpList {
+    Ok(JumpList {
         kind: JumpListKind::Custom,
         app_id: filename.and_then(appid_from_filename),
         entries,

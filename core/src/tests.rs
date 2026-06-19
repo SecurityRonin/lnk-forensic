@@ -898,6 +898,28 @@ fn checked_custom_returns_ok_on_valid_file() {
 }
 
 #[test]
+fn jumplist_error_display_carries_the_offending_value() {
+    let not_cfb = JumplistError::NotCompoundFile {
+        found_magic: *b"not a cf",
+    };
+    let s = not_cfb.to_string();
+    assert!(s.contains("compound file"), "{s}");
+    assert!(
+        s.contains("6E"),
+        "the offending magic bytes must appear: {s}"
+    );
+
+    let missing = JumplistError::MissingDestListStream.to_string();
+    assert!(missing.contains("DestList"), "{missing}");
+
+    let bad_ver = JumplistError::BadCustomFormatVersion { found: 9 }.to_string();
+    assert!(
+        bad_ver.contains('9'),
+        "the offending version must appear: {bad_ver}"
+    );
+}
+
+#[test]
 fn custom_destinations_splits_embedded_lnks_by_clsid_and_footer() {
     let lnk1 = removable_lnk(0x1111_1111, "F:\\a.exe");
     let lnk2 = removable_lnk(0x2222_2222, "G:\\b.exe");

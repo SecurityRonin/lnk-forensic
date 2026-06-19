@@ -25,8 +25,9 @@ use forensicnomicon::shlink;
 
 mod jumplist;
 pub use jumplist::{
-    parse_automatic_destinations, parse_custom_destinations, DestListEntry, JumpList,
-    JumpListEntry, JumpListKind,
+    parse_automatic_destinations, parse_automatic_destinations_checked, parse_custom_destinations,
+    parse_custom_destinations_checked, DestListEntry, JumpList, JumpListEntry, JumpListKind,
+    JumplistError,
 };
 
 /// The number of 100-nanosecond intervals between the Windows FILETIME epoch
