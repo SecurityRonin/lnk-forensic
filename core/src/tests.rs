@@ -95,7 +95,7 @@ fn link_info_network(net_name: &str, device_name: &str) -> Vec<u8> {
 
     let header_size = 0x1Cu32;
     let cnrl_offset = header_size; // CNRL right after the LinkInfo header
-    // CommonPathSuffix is an empty NUL.
+                                   // CommonPathSuffix is an empty NUL.
     let suffix_offset = cnrl_offset + cnrl.len() as u32;
     let total = suffix_offset as usize + 1;
 
@@ -385,7 +385,11 @@ fn full_link_round_trips_all_sections() {
 
     let link = parse_shell_link(&data).unwrap();
     assert_eq!(
-        link.link_info.unwrap().volume_id.unwrap().drive_serial_number,
+        link.link_info
+            .unwrap()
+            .volume_id
+            .unwrap()
+            .drive_serial_number,
         0x1234_5678
     );
     assert_eq!(link.string_data.name.as_deref(), Some("Shortcut"));
@@ -675,7 +679,10 @@ fn undersize_extra_block_terminates_walk() {
 
 /// A complete, valid removable-media `.lnk` for embedding into a Jump List.
 fn removable_lnk(serial: u32, base_path: &str) -> Vec<u8> {
-    let mut d = header(shlink::LINK_FLAG_HAS_LINK_INFO, shlink::FILE_ATTRIBUTE_ARCHIVE);
+    let mut d = header(
+        shlink::LINK_FLAG_HAS_LINK_INFO,
+        shlink::FILE_ATTRIBUTE_ARCHIVE,
+    );
     d.extend_from_slice(&link_info_volume(
         drive_type::REMOVABLE,
         serial,
@@ -760,8 +767,11 @@ fn automatic_destinations_parses_destlist_and_embedded_lnk() {
     let destlist = destlist_stream_v2(&entry);
     let cfb_bytes = build_automatic_cfb(&destlist, 1, &lnk);
 
-    let jl = parse_automatic_destinations(&cfb_bytes, Some("1b4dd67f29cb1962.automaticDestinations-ms"))
-        .expect("valid CFB automatic-destinations");
+    let jl = parse_automatic_destinations(
+        &cfb_bytes,
+        Some("1b4dd67f29cb1962.automaticDestinations-ms"),
+    )
+    .expect("valid CFB automatic-destinations");
     assert_eq!(jl.kind, JumpListKind::Automatic);
     assert_eq!(jl.app_id.as_deref(), Some("1b4dd67f29cb1962"));
     assert_eq!(jl.entries.len(), 1);
@@ -775,7 +785,14 @@ fn automatic_destinations_parses_destlist_and_embedded_lnk() {
     assert_eq!(dl.path, "E:\\report.docx");
     assert!(dl.last_access > 0);
     // The embedded LNK's volume serial surfaces.
-    let vol = e.link.link_info.as_ref().unwrap().volume_id.as_ref().unwrap();
+    let vol = e
+        .link
+        .link_info
+        .as_ref()
+        .unwrap()
+        .volume_id
+        .as_ref()
+        .unwrap();
     assert_eq!(vol.drive_serial_number, 0xDEAD_BEEF);
     assert_eq!(vol.drive_type, drive_type::REMOVABLE);
 }
@@ -784,6 +801,100 @@ fn automatic_destinations_parses_destlist_and_embedded_lnk() {
 fn automatic_destinations_rejects_non_cfb() {
     assert!(parse_automatic_destinations(b"not a compound file", None).is_none());
     assert!(parse_automatic_destinations(&[], None).is_none());
+}
+
+/// Build a real CFB compound file that has streams but lacks a `DestList`.
+fn build_cfb_without_destlist() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+    comp.create_stream("SomethingElse")
+        .unwrap()
+        .write_all(b"payload")
+        .unwrap();
+    comp.flush().unwrap();
+    comp.into_inner().into_inner()
+}
+
+#[test]
+fn checked_automatic_surfaces_not_compound_file_with_magic() {
+    let data = b"not a cfb file at all";
+    let err = parse_automatic_destinations_checked(data, None)
+        .expect_err("non-CFB bytes must surface a structural error");
+    match err {
+        JumplistError::NotCompoundFile { found_magic } => {
+            assert_eq!(&found_magic, b"not a cf");
+        }
+        other => panic!("expected NotCompoundFile, got {other:?}"),
+    }
+}
+
+#[test]
+fn checked_automatic_surfaces_missing_destlist_stream() {
+    let data = build_cfb_without_destlist();
+    let err = parse_automatic_destinations_checked(&data, None)
+        .expect_err("a CFB without DestList must surface a structural error");
+    assert!(
+        matches!(err, JumplistError::MissingDestListStream),
+        "expected MissingDestListStream, got {err:?}"
+    );
+}
+
+#[test]
+fn checked_automatic_returns_ok_on_valid_file() {
+    let lnk = removable_lnk(0xDEAD_BEEF, "E:\\report.docx");
+    let entry = destlist_entry_v2(1, "ANALYST-PC", true, 9, "E:\\report.docx");
+    let destlist = destlist_stream_v2(&entry);
+    let cfb_bytes = build_automatic_cfb(&destlist, 1, &lnk);
+
+    let jl = parse_automatic_destinations_checked(&cfb_bytes, None)
+        .expect("valid CFB automatic-destinations must parse");
+    assert_eq!(jl.kind, JumpListKind::Automatic);
+    assert_eq!(jl.entries.len(), 1);
+}
+
+#[test]
+fn checked_automatic_short_input_pads_magic() {
+    // Fewer than 8 bytes: the captured magic is zero-padded, never panics.
+    let err = parse_automatic_destinations_checked(b"abc", None)
+        .expect_err("short non-CFB bytes must surface a structural error");
+    match err {
+        JumplistError::NotCompoundFile { found_magic } => {
+            assert_eq!(&found_magic, b"abc\0\0\0\0\0");
+        }
+        other => panic!("expected NotCompoundFile, got {other:?}"),
+    }
+}
+
+#[test]
+fn checked_custom_surfaces_bad_format_version() {
+    let mut data = Vec::new();
+    data.extend_from_slice(&9u32.to_le_bytes()); // wrong version
+    data.extend_from_slice(&[0u8; 8]);
+    let err = parse_custom_destinations_checked(&data, None)
+        .expect_err("a wrong format version must surface a structural error");
+    match err {
+        JumplistError::BadCustomFormatVersion { found } => assert_eq!(found, 9),
+        other => panic!("expected BadCustomFormatVersion, got {other:?}"),
+    }
+}
+
+#[test]
+fn checked_custom_returns_ok_on_valid_file() {
+    let lnk1 = removable_lnk(0x1111_1111, "F:\\a.exe");
+    let mut data = Vec::new();
+    data.extend_from_slice(&2u32.to_le_bytes()); // format version 2
+    data.extend_from_slice(&1u32.to_le_bytes()); // category count
+    data.extend_from_slice(&0u32.to_le_bytes()); // @8 unknown
+    data.extend_from_slice(&2u32.to_le_bytes()); // category type
+    data.extend_from_slice(&1u32.to_le_bytes()); // number of entries
+    data.extend_from_slice(&clsid_le());
+    data.extend_from_slice(&lnk1);
+    data.extend_from_slice(&0xBABF_FBABu32.to_le_bytes()); // footer
+
+    let jl = parse_custom_destinations_checked(&data, None)
+        .expect("valid custom-destinations must parse");
+    assert_eq!(jl.kind, JumpListKind::Custom);
+    assert_eq!(jl.entries.len(), 1);
 }
 
 #[test]
@@ -795,7 +906,7 @@ fn custom_destinations_splits_embedded_lnks_by_clsid_and_footer() {
     data.extend_from_slice(&2u32.to_le_bytes()); // format version 2
     data.extend_from_slice(&1u32.to_le_bytes()); // category count
     data.extend_from_slice(&0u32.to_le_bytes()); // @8 unknown
-    // A user-tasks category (type 2): count + two shell objects (CLSID + LNK).
+                                                 // A user-tasks category (type 2): count + two shell objects (CLSID + LNK).
     data.extend_from_slice(&2u32.to_le_bytes()); // category type = user tasks
     data.extend_from_slice(&2u32.to_le_bytes()); // number of entries
     data.extend_from_slice(&clsid_le()); // CLSID prefix for entry 1
@@ -905,7 +1016,10 @@ fn automatic_destinations_skips_entry_with_missing_lnk_substream() {
     let bytes = comp.into_inner().into_inner();
 
     let jl = parse_automatic_destinations(&bytes, None).expect("valid CFB");
-    assert!(jl.entries.is_empty(), "missing LNK sub-stream yields no entry");
+    assert!(
+        jl.entries.is_empty(),
+        "missing LNK sub-stream yields no entry"
+    );
 }
 
 #[test]
@@ -917,7 +1031,10 @@ fn automatic_destinations_skips_entry_with_invalid_lnk() {
     let bytes = build_automatic_cfb(&destlist, 1, &garbage);
 
     let jl = parse_automatic_destinations(&bytes, None).expect("valid CFB");
-    assert!(jl.entries.is_empty(), "invalid embedded LNK yields no entry");
+    assert!(
+        jl.entries.is_empty(),
+        "invalid embedded LNK yields no entry"
+    );
 }
 
 #[test]
