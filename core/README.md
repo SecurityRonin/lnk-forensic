@@ -4,7 +4,7 @@
 [![Docs.rs](https://img.shields.io/docsrs/lnk-core)](https://docs.rs/lnk-core)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
 
-**A panic-free Windows Shell Link (`.lnk`) reader — `[MS-SHLLINK]` bytes into a typed `ShellLink`, no findings.**
+**An input-fuzzed Windows Shell Link (`.lnk`) reader — `[MS-SHLLINK]` bytes into a typed `ShellLink`, no findings.**
 
 The reader half of [`lnk-forensic`](https://github.com/SecurityRonin/lnk-forensic).
 For graded forensic findings, use the
