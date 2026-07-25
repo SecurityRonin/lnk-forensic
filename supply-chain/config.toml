@@ -17,10 +17,10 @@ url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.to
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
 [policy.lnk-core]
-audit-as-crates-io = true
+audit-as-crates-io = false
 
 [policy.lnk-forensic]
-audit-as-crates-io = true
+audit-as-crates-io = false
 
 [[exemptions.cfb]]
 version = "0.14.0"
@@ -56,14 +56,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.js-sys]]
 version = "0.3.103"
-criteria = "safe-to-deploy"
-
-[[exemptions.lnk-core]]
-version = "0.4.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.lnk-forensic]]
-version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
