@@ -7,3 +7,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 release-plz maintains this file from conventional-commit messages on `main`.
 
 ## [Unreleased]
+
+## [0.4.1](https://github.com/SecurityRonin/lnk-forensic/compare/lnk-core-v0.4.0...lnk-core-v0.4.1) - 2026-07-25
+
+### Documentation
+
+- *(readme)* align robustness wording with fleet standard (fuzzed + panic-free-by-lint pairing)
